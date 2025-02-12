@@ -1,4 +1,4 @@
--- Пересоздание типа interpolation
+-- Создание типа interpolation
 DO $$ 
 BEGIN
     DROP TYPE IF EXISTS interpolation;
