@@ -5,6 +5,7 @@ BEGIN
     CREATE TYPE interpolation AS ENUM ('linear', 'spline');
 END $$;
 
+
 -- Создание последовательностей для всех таблиц
 CREATE SEQUENCE IF NOT EXISTS military_ranks_seq START 3;
 CREATE SEQUENCE IF NOT EXISTS employees_seq START 2;
@@ -230,29 +231,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Добавление записей в таблицу military_ranks
+INSERT INTO military_ranks (id, description) 
+VALUES (1, 'Рядовой'), (2, 'Лейтенант');
 
-
--- Генерация тестовых данных
-DO $$ 
-DECLARE
-    i INTEGER;
-BEGIN
-    -- Добавление пользователей
-    FOR i IN 1..10 LOOP
-        INSERT INTO employees(name, birthday, military_rank_id)
-        VALUES ('User ' || i, '1980-01-01', (i % 2) + 1);
-    END LOOP;
-
-    -- Генерация измерений
-    FOR i IN 1..100 LOOP
-        INSERT INTO measurement_input_params(measurement_type_id, height, temperature, pressure, wind_direction, wind_speed)
-        VALUES (
-            (i % 2) + 1, 
-            round(random() * 200), 
-            round(random() * (58 - (-58)) + (-58), 2), 
-            round(random() * (900 - 500) + 500, 2), 
-            round(random() * 59), 
-            round(random() * 20)
-        );
-    END LOOP;
-END $$;
