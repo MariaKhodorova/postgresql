@@ -76,6 +76,7 @@ BEGIN
     END IF;
 END $$;
 
+
 -- Функция интерполяции для расчёта поправки к температуре
 CREATE OR REPLACE FUNCTION get_temperature_correction(temp DECIMAL)
 RETURNS DECIMAL AS $$
@@ -122,3 +123,136 @@ BEGIN
     END IF;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Функция для формирования кода в формате ДДЧЧМ
+CREATE OR REPLACE FUNCTION get_detailed_measurement_code() 
+RETURNS TEXT AS $$
+DECLARE
+    day INTEGER;
+    hour INTEGER;
+    minute INTEGER;
+BEGIN
+    -- Получаем текущую системную дату и время
+    SELECT EXTRACT(DAY FROM now()), EXTRACT(HOUR FROM now()), EXTRACT(MINUTE FROM now()) INTO day, hour, minute;
+
+    -- Формируем код в формате ДДЧЧМ
+    RETURN LPAD(day::TEXT, 2, '0') || LPAD(hour::TEXT, 2, '0') || LPAD(minute::TEXT, 2, '0');
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для вычисления высоты метеопоста
+CREATE OR REPLACE FUNCTION get_measurement_post_height() 
+RETURNS TEXT AS $$
+DECLARE
+    height INTEGER;
+BEGIN
+    -- Получаем данные о высоте метеопоста
+    SELECT height INTO height FROM measurement_input_params LIMIT 1;
+
+    -- Формируем код в формате ВВВВ
+    RETURN LPAD(height::TEXT, 4, '0');
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для вычисления отклонения давления
+CREATE OR REPLACE FUNCTION get_pressure_deviation()
+RETURNS TEXT AS $$
+DECLARE
+    pressure DECIMAL;
+    deviation DECIMAL;
+BEGIN
+    -- Получаем данные о давлении
+    SELECT pressure INTO pressure FROM measurement_input_params LIMIT 1;
+
+    -- Отклонение давления от табличного значения 750 мм рт. ст.
+    deviation := pressure - 750;
+
+    -- Формируем код в формате БББТТ
+    IF deviation > 0 THEN
+        RETURN LPAD(deviation::TEXT, 3, '0');
+    ELSE
+        RETURN LPAD((500 - deviation)::TEXT, 3, '0');
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Функция для вычисления отклонения температуры
+CREATE OR REPLACE FUNCTION get_temperature_deviation()
+RETURNS TEXT AS $$
+DECLARE
+    temperature DECIMAL;
+    deviation DECIMAL;
+BEGIN
+    -- Получаем данные о температуре
+    SELECT temperature INTO temperature FROM measurement_input_params LIMIT 1;
+
+    -- Отклонение температуры от табличного значения 15,9°C
+    deviation := temperature - 15.9;
+
+    -- Формируем код в формате ТТ
+    RETURN LPAD(deviation::TEXT, 2, '0');
+END;
+$$ LANGUAGE plpgsql;
+
+-- Создание таблицы настроек для проверки входных данных
+CREATE TABLE IF NOT EXISTS measure_settings (
+    id SERIAL PRIMARY KEY,
+    min_temperature DECIMAL DEFAULT -58,
+    max_temperature DECIMAL DEFAULT 58,
+    min_pressure DECIMAL DEFAULT 500,
+    max_pressure DECIMAL DEFAULT 900,
+    min_wind_direction DECIMAL DEFAULT 0,
+    max_wind_direction DECIMAL DEFAULT 59
+);
+
+-- Функция для проверки входных параметров
+CREATE OR REPLACE FUNCTION validate_measurement_params(
+    p_temperature DECIMAL, 
+    p_pressure DECIMAL, 
+    p_wind_direction DECIMAL
+) 
+RETURNS VOID AS $$
+BEGIN
+    -- Проверка температуры
+    IF p_temperature < (SELECT min_temperature FROM measure_settings) OR p_temperature > (SELECT max_temperature FROM measure_settings) THEN
+        RAISE EXCEPTION 'Temperature out of bounds: %', p_temperature;
+    END IF;
+
+    -- Проверка давления
+    IF p_pressure < (SELECT min_pressure FROM measure_settings) OR p_pressure > (SELECT max_pressure FROM measure_settings) THEN
+        RAISE EXCEPTION 'Pressure out of bounds: %', p_pressure;
+    END IF;
+
+    -- Проверка направления ветра
+    IF p_wind_direction < (SELECT min_wind_direction FROM measure_settings) OR p_wind_direction > (SELECT max_wind_direction FROM measure_settings) THEN
+        RAISE EXCEPTION 'Wind direction out of bounds: %', p_wind_direction;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+-- Генерация тестовых данных
+DO $$ 
+DECLARE
+    i INTEGER;
+BEGIN
+    -- Добавление пользователей
+    FOR i IN 1..10 LOOP
+        INSERT INTO employees(name, birthday, military_rank_id)
+        VALUES ('User ' || i, '1980-01-01', (i % 2) + 1);
+    END LOOP;
+
+    -- Генерация измерений
+    FOR i IN 1..100 LOOP
+        INSERT INTO measurement_input_params(measurement_type_id, height, temperature, pressure, wind_direction, wind_speed)
+        VALUES (
+            (i % 2) + 1, 
+            round(random() * 200), 
+            round(random() * (58 - (-58)) + (-58), 2), 
+            round(random() * (900 - 500) + 500, 2), 
+            round(random() * 59), 
+            round(random() * 20)
+        );
+    END LOOP;
+END $$;
