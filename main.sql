@@ -1,10 +1,22 @@
 -- Создание типа interpolation
 DO $$ 
 BEGIN
-    DROP TYPE IF EXISTS interpolation;
+    DROP TYPE IF EXISTS interpolation CASCADE;
     CREATE TYPE interpolation AS ENUM ('linear', 'spline');
 END $$;
 
+-- Создание составного типа для параметров измерений
+DO $$
+BEGIN
+    DROP TYPE IF EXISTS measurement_params CASCADE;
+    CREATE TYPE measurement_params AS (
+        height NUMERIC(8,2),
+        temperature NUMERIC(8,2),
+        pressure NUMERIC(8,2),
+        wind_direction NUMERIC(8,2),
+        wind_speed NUMERIC(8,2)
+    );
+END $$;
 
 -- Создание последовательностей для всех таблиц
 CREATE SEQUENCE IF NOT EXISTS military_ranks_seq START 3;
@@ -13,6 +25,21 @@ CREATE SEQUENCE IF NOT EXISTS measurement_types_seq START 3;
 CREATE SEQUENCE IF NOT EXISTS measurement_input_params_seq START 2;
 CREATE SEQUENCE IF NOT EXISTS measurement_batches_seq START 2;
 CREATE SEQUENCE IF NOT EXISTS temperature_corrections_seq START 1;
+
+-- Создание таблицы настроек для проверки входных данных
+CREATE TABLE IF NOT EXISTS measure_settings (
+    id SERIAL PRIMARY KEY,
+    min_temperature DECIMAL DEFAULT -58,    -- Минимальная температура
+    max_temperature DECIMAL DEFAULT 58,     -- Максимальная температура
+    min_pressure DECIMAL DEFAULT 500,       -- Минимальное давление
+    max_pressure DECIMAL DEFAULT 900,       -- Максимальное давление
+    min_wind_direction DECIMAL DEFAULT 0,   -- Минимальное направление ветра
+    max_wind_direction DECIMAL DEFAULT 59,  -- Максимальное направление ветра
+    min_wind_speed DECIMAL DEFAULT 0,       -- Минимальная скорость ветра
+    max_wind_speed DECIMAL DEFAULT 20,      -- Максимальная скорость ветра
+    min_height DECIMAL DEFAULT 0,           -- Минимальная высота
+    max_height DECIMAL DEFAULT 200          -- Максимальная высота
+);
 
 -- Справочник должностей
 CREATE TABLE IF NOT EXISTS military_ranks (
@@ -54,7 +81,7 @@ CREATE TABLE IF NOT EXISTS measurement_batches (
     started TIMESTAMP DEFAULT now()
 );
 
--- Таблица поправок по температуре (согласно Таблице 1)
+-- Таблица поправок по температуре
 CREATE TABLE IF NOT EXISTS temperature_corrections (
     id INTEGER PRIMARY KEY NOT NULL DEFAULT nextval('temperature_corrections_seq'),
     temperature DECIMAL NOT NULL UNIQUE,
@@ -77,6 +104,66 @@ BEGIN
     END IF;
 END $$;
 
+-- Вставка настроек по умолчанию, если таблица пустая
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM measure_settings) THEN
+        INSERT INTO measure_settings (
+            min_temperature, max_temperature,
+            min_pressure, max_pressure,
+            min_wind_direction, max_wind_direction,
+            min_wind_speed, max_wind_speed,
+            min_height, max_height
+        ) VALUES (
+            -58, 58,    -- Температура
+            500, 900,   -- Давление
+            0, 59,      -- Направление ветра
+            0, 20,      -- Скорость ветра
+            0, 200      -- Высота
+        );
+    END IF;
+END $$;
+
+-- Функция для валидации параметров измерений
+CREATE OR REPLACE FUNCTION validate_measurement(
+    params measurement_params
+) 
+RETURNS measurement_params AS $$
+DECLARE
+    settings measure_settings;
+BEGIN
+    -- Получаем настройки
+    SELECT * INTO settings FROM measure_settings LIMIT 1;
+    
+    -- Проверяем высоту
+    IF params.height < settings.min_height OR params.height > settings.max_height THEN
+        RAISE EXCEPTION 'Высота вне допустимого диапазона: %', params.height;
+    END IF;
+
+    -- Проверяем температуру
+    IF params.temperature < settings.min_temperature OR params.temperature > settings.max_temperature THEN
+        RAISE EXCEPTION 'Температура вне допустимого диапазона: %', params.temperature;
+    END IF;
+
+    -- Проверяем давление
+    IF params.pressure < settings.min_pressure OR params.pressure > settings.max_pressure THEN
+        RAISE EXCEPTION 'Давление вне допустимого диапазона: %', params.pressure;
+    END IF;
+
+    -- Проверяем направление ветра
+    IF params.wind_direction < settings.min_wind_direction OR params.wind_direction > settings.max_wind_direction THEN
+        RAISE EXCEPTION 'Направление ветра вне допустимого диапазона: %', params.wind_direction;
+    END IF;
+
+    -- Проверяем скорость ветра
+    IF params.wind_speed < settings.min_wind_speed OR params.wind_speed > settings.max_wind_speed THEN
+        RAISE EXCEPTION 'Скорость ветра вне допустимого диапазона: %', params.wind_speed;
+    END IF;
+
+    -- Все проверки пройдены, возвращаем валидированные параметры
+    RETURN params;
+END;
+$$ LANGUAGE plpgsql;
 
 -- Функция интерполяции для расчёта поправки к температуре
 CREATE OR REPLACE FUNCTION get_temperature_correction(temp DECIMAL)
@@ -133,10 +220,7 @@ DECLARE
     hour INTEGER;
     minute INTEGER;
 BEGIN
-    -- Получаем текущую системную дату и время
     SELECT EXTRACT(DAY FROM now()), EXTRACT(HOUR FROM now()), EXTRACT(MINUTE FROM now()) INTO day, hour, minute;
-
-    -- Формируем код в формате ДДЧЧМ
     RETURN LPAD(day::TEXT, 2, '0') || LPAD(hour::TEXT, 2, '0') || LPAD(minute::TEXT, 2, '0');
 END;
 $$ LANGUAGE plpgsql;
@@ -147,10 +231,7 @@ RETURNS TEXT AS $$
 DECLARE
     height INTEGER;
 BEGIN
-    -- Получаем данные о высоте метеопоста
     SELECT height INTO height FROM measurement_input_params LIMIT 1;
-
-    -- Формируем код в формате ВВВВ
     RETURN LPAD(height::TEXT, 4, '0');
 END;
 $$ LANGUAGE plpgsql;
@@ -162,13 +243,8 @@ DECLARE
     pressure DECIMAL;
     deviation DECIMAL;
 BEGIN
-    -- Получаем данные о давлении
     SELECT pressure INTO pressure FROM measurement_input_params LIMIT 1;
-
-    -- Отклонение давления от табличного значения 750 мм рт. ст.
     deviation := pressure - 750;
-
-    -- Формируем код в формате БББТТ
     IF deviation > 0 THEN
         RETURN LPAD(deviation::TEXT, 3, '0');
     ELSE
@@ -184,54 +260,125 @@ DECLARE
     temperature DECIMAL;
     deviation DECIMAL;
 BEGIN
-    -- Получаем данные о температуре
     SELECT temperature INTO temperature FROM measurement_input_params LIMIT 1;
-
-    -- Отклонение температуры от табличного значения 15,9°C
     deviation := temperature - 15.9;
-
-    -- Формируем код в формате ТТ
     RETURN LPAD(deviation::TEXT, 2, '0');
 END;
 $$ LANGUAGE plpgsql;
 
--- Создание таблицы настроек для проверки входных данных
-CREATE TABLE IF NOT EXISTS measure_settings (
-    id SERIAL PRIMARY KEY,
-    min_temperature DECIMAL DEFAULT -58,
-    max_temperature DECIMAL DEFAULT 58,
-    min_pressure DECIMAL DEFAULT 500,
-    max_pressure DECIMAL DEFAULT 900,
-    min_wind_direction DECIMAL DEFAULT 0,
-    max_wind_direction DECIMAL DEFAULT 59
-);
-
--- Функция для проверки входных параметров
-CREATE OR REPLACE FUNCTION validate_measurement_params(
-    p_temperature DECIMAL, 
-    p_pressure DECIMAL, 
-    p_wind_direction DECIMAL
+-- Функция для вставки измерений
+CREATE OR REPLACE FUNCTION insert_measurement(
+    p_employee_id INTEGER,
+    p_measurement_type_id INTEGER,
+    p_params measurement_params
 ) 
-RETURNS VOID AS $$
+RETURNS INTEGER AS $$
+DECLARE
+    param_id INTEGER;
+    batch_id INTEGER;
 BEGIN
-    -- Проверка температуры
-    IF p_temperature < (SELECT min_temperature FROM measure_settings) OR p_temperature > (SELECT max_temperature FROM measure_settings) THEN
-        RAISE EXCEPTION 'Temperature out of bounds: %', p_temperature;
-    END IF;
+    INSERT INTO measurement_input_params(
+        measurement_type_id,
+        height,
+        temperature,
+        pressure,
+        wind_direction,
+        wind_speed
+    ) VALUES (
+        p_measurement_type_id,
+        p_params.height,
+        p_params.temperature,
+        p_params.pressure,
+        p_params.wind_direction,
+        p_params.wind_speed
+    ) RETURNING id INTO param_id;
 
-    -- Проверка давления
-    IF p_pressure < (SELECT min_pressure FROM measure_settings) OR p_pressure > (SELECT max_pressure FROM measure_settings) THEN
-        RAISE EXCEPTION 'Pressure out of bounds: %', p_pressure;
-    END IF;
+    INSERT INTO measurement_batches(
+        employee_id,
+        measurement_input_param_id,
+        started
+    ) VALUES (
+        p_employee_id,
+        param_id,
+        NOW()
+    ) RETURNING id INTO batch_id;
 
-    -- Проверка направления ветра
-    IF p_wind_direction < (SELECT min_wind_direction FROM measure_settings) OR p_wind_direction > (SELECT max_wind_direction FROM measure_settings) THEN
-        RAISE EXCEPTION 'Wind direction out of bounds: %', p_wind_direction;
-    END IF;
+    RETURN batch_id;
 END;
 $$ LANGUAGE plpgsql;
 
--- Добавление записей в таблицу military_ranks
-INSERT INTO military_ranks (id, description) 
-VALUES (1, 'Рядовой'), (2, 'Лейтенант');
+-- Отдельный скрипт для генерации тестовых данных
+DO $$
+DECLARE
+    i INTEGER;
+    user_id INTEGER;
+    test_params measurement_params;
+    validated_params measurement_params;
+    measurement_count CONSTANT INTEGER := 100; -- Количество измерений на пользователя
+    user_count CONSTANT INTEGER := 5;         -- Количество тестовых пользователей
+BEGIN
+    -- Добавление записей в таблицу military_ranks
+    INSERT INTO military_ranks (id, description) 
+    VALUES (1, 'Рядовой'), (2, 'Лейтенант')
+    ON CONFLICT (id) DO NOTHING;
 
+    -- Вставка данных в таблицу measurement_types
+    INSERT INTO measurement_types (id, short_name, description)
+    VALUES
+        (1, 'Type1', 'Description of Measurement Type 1'),
+        (2, 'Type2', 'Description of Measurement Type 2')
+    ON CONFLICT (id) DO NOTHING;
+
+    -- Добавление пользователей
+    FOR i IN 1..user_count LOOP
+        -- Вставка новых пользователей со случайными данными
+        INSERT INTO employees(name, birthday, military_rank_id)
+        VALUES (
+            'User ' || i,
+            '1980-01-01'::timestamp + (random() * 365 * 20 || ' days')::interval,
+            (i % 2) + 1
+        ) RETURNING id INTO user_id;
+
+        -- Добавление измерений для каждого пользователя
+        FOR j IN 1..measurement_count LOOP
+            BEGIN
+                -- Создаем параметры измерения
+                test_params.height := (random() * 200)::numeric(8,2);
+                test_params.temperature := (random() * (58 - (-58)) + (-58))::numeric(8,2);
+                test_params.pressure := (random() * (900 - 500) + 500)::numeric(8,2);
+                test_params.wind_direction := (random() * 59)::numeric(8,2);
+                test_params.wind_speed := (random() * 20)::numeric(8,2);
+
+                -- Валидируем параметры
+                validated_params := validate_measurement(test_params);
+
+                -- Вставляем измерение
+                PERFORM insert_measurement(
+                    user_id,
+                    (j % 2) + 1,  -- Чередуем типы измерений
+                    validated_params
+                );
+
+            EXCEPTION 
+                WHEN OTHERS THEN
+                    RAISE NOTICE 'Ошибка при создании измерения для пользователя % (попытка %): %', i, j, SQLERRM;
+                    CONTINUE;
+            END;
+        END LOOP;
+        
+        RAISE NOTICE 'Создан пользователь % с измерениями', i;
+    END LOOP;
+END $$;
+
+-- Проверка результатов
+DO $$
+DECLARE
+    user_count INTEGER;
+    measurement_count INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO user_count FROM employees;
+    SELECT COUNT(*) INTO measurement_count FROM measurement_batches;
+    
+    RAISE NOTICE 'Создано пользователей: %', user_count;
+    RAISE NOTICE 'Создано измерений: %', measurement_count;
+END $$;
