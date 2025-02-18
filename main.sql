@@ -266,7 +266,7 @@ DECLARE
     deviation DECIMAL;
 BEGIN
     SELECT pressure INTO pressure FROM measurement_input_params LIMIT 1;
-    deviation := pressure - (SELECT constant_value FROM measure_settings LIMIT 1); -- Используем 750 из настроек
+    deviation := pressure - (SELECT constant_value FROM measure_settings LIMIT 1);
     IF deviation > 0 THEN
         RETURN LPAD(deviation::TEXT, 3, '0');
     ELSE
@@ -283,7 +283,7 @@ DECLARE
     deviation DECIMAL;
 BEGIN
     SELECT temperature INTO temperature FROM measurement_input_params LIMIT 1;
-    deviation := temperature - (SELECT constant_value FROM measure_settings LIMIT 1); -- Используем 750 из настроек
+    deviation := temperature - (SELECT constant_value FROM measure_settings LIMIT 1);
     RETURN LPAD(deviation::TEXT, 4, '0');
 END;
 $$ LANGUAGE plpgsql;
