@@ -38,8 +38,50 @@ CREATE TABLE IF NOT EXISTS measure_settings (
     min_wind_speed DECIMAL DEFAULT 0,       -- Минимальная скорость ветра
     max_wind_speed DECIMAL DEFAULT 20,      -- Максимальная скорость ветра
     min_height DECIMAL DEFAULT 0,           -- Минимальная высота
-    max_height DECIMAL DEFAULT 200          -- Максимальная высота
+    max_height DECIMAL DEFAULT 200,         -- Максимальная высота
+    constant_value DECIMAL DEFAULT 750,     -- Константное значение (750)
+    additional_constant DECIMAL DEFAULT 15.9, -- Дополнительная константа (15.9)
+    CONSTRAINT measure_settings_single_record CHECK (id = 1)  -- Ограничение на одну запись
 );
+
+-- Вставка настроек по умолчанию, если таблица пуста
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM measure_settings) THEN
+        INSERT INTO measure_settings (
+            min_temperature, max_temperature,
+            min_pressure, max_pressure,
+            min_wind_direction, max_wind_direction,
+            min_wind_speed, max_wind_speed,
+            min_height, max_height,
+            constant_value, additional_constant
+        ) VALUES (
+            -58, 58,    -- Температура
+            500, 900,   -- Давление
+            0, 59,      -- Направление ветра
+            0, 20,      -- Скорость ветра
+            0, 200,     -- Высота
+            750,        -- Константное значение
+            15.9        -- Дополнительная константа
+        );
+    ELSE
+        UPDATE measure_settings
+        SET 
+            min_temperature = -58,
+            max_temperature = 58,
+            min_pressure = 500,
+            max_pressure = 900,
+            min_wind_direction = 0,
+            max_wind_direction = 59,
+            min_wind_speed = 0,
+            max_wind_speed = 20,
+            min_height = 0,
+            max_height = 200,
+            constant_value = 750,    
+            additional_constant = 15.9 
+        WHERE id = 1;
+    END IF;
+END $$;
 
 -- Справочник должностей
 CREATE TABLE IF NOT EXISTS military_ranks (
@@ -101,26 +143,6 @@ BEGIN
         (25, 2.0),
         (30, 3.5),
         (40, 4.5);
-    END IF;
-END $$;
-
--- Вставка настроек по умолчанию, если таблица пустая
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM measure_settings) THEN
-        INSERT INTO measure_settings (
-            min_temperature, max_temperature,
-            min_pressure, max_pressure,
-            min_wind_direction, max_wind_direction,
-            min_wind_speed, max_wind_speed,
-            min_height, max_height
-        ) VALUES (
-            -58, 58,    -- Температура
-            500, 900,   -- Давление
-            0, 59,      -- Направление ветра
-            0, 20,      -- Скорость ветра
-            0, 200      -- Высота
-        );
     END IF;
 END $$;
 
@@ -244,7 +266,7 @@ DECLARE
     deviation DECIMAL;
 BEGIN
     SELECT pressure INTO pressure FROM measurement_input_params LIMIT 1;
-    deviation := pressure - 750;
+    deviation := pressure - (SELECT constant_value FROM measure_settings LIMIT 1); -- Используем 750 из настроек
     IF deviation > 0 THEN
         RETURN LPAD(deviation::TEXT, 3, '0');
     ELSE
@@ -261,10 +283,11 @@ DECLARE
     deviation DECIMAL;
 BEGIN
     SELECT temperature INTO temperature FROM measurement_input_params LIMIT 1;
-    deviation := temperature - 15.9;
-    RETURN LPAD(deviation::TEXT, 2, '0');
+    deviation := temperature - (SELECT constant_value FROM measure_settings LIMIT 1); -- Используем 750 из настроек
+    RETURN LPAD(deviation::TEXT, 4, '0');
 END;
 $$ LANGUAGE plpgsql;
+
 
 -- Функция для вставки измерений
 CREATE OR REPLACE FUNCTION insert_measurement(
