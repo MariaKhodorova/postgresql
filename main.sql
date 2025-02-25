@@ -838,18 +838,7 @@ SELECT
     e.name AS "ФИО",
     mr.description AS "Должность",
     COUNT(mb.id) AS "Кол-во измерений",
-    SUM(
-        CASE WHEN (
-            mip.temperature < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_temperature') OR
-            mip.temperature > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_temperature') OR
-            mip.pressure < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_pressure') OR
-            mip.pressure > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_pressure') OR
-            mip.wind_direction < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_wind_direction') OR
-            mip.wind_direction > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_wind_direction') OR
-            mip.height < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_height') OR
-            mip.height > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_height')
-        ) THEN 1 ELSE 0 END
-    ) AS "Количество ошибочных данных"
+    SUM(error_data.error_count) AS "Количество ошибочных данных"
 FROM 
     employees e
 JOIN 
@@ -857,7 +846,24 @@ JOIN
 LEFT JOIN 
     measurment_baths mb ON e.id = mb.emploee_id
 LEFT JOIN 
-    measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+    (
+        SELECT 
+            mb.emploee_id,
+            CASE WHEN (
+                mip.temperature < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_temperature') OR
+                mip.temperature > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_temperature') OR
+                mip.pressure < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_pressure') OR
+                mip.pressure > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_pressure') OR
+                mip.wind_direction < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_wind_direction') OR
+                mip.wind_direction > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_wind_direction') OR
+                mip.height < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_height') OR
+                mip.height > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_height')
+            ) THEN 1 ELSE 0 END AS error_count
+        FROM 
+            measurment_baths mb
+        LEFT JOIN 
+            measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+    ) error_data ON e.id = error_data.emploee_id
 GROUP BY 
     e.name, mr.description
 ORDER BY 
