@@ -759,3 +759,107 @@
     	
     end $$;
 
+-- Создание таблицы public.calc_air_temp
+CREATE TABLE public.calc_air_temp (
+    height INT,
+    measurement_type_id INT,
+    is_positive BOOLEAN,
+    data INT[]
+);
+
+INSERT INTO public.calc_air_temp
+(
+    height,
+    measurement_type_id,
+    is_positive,
+    data
+)
+VALUES
+    (200, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50]),
+    (200, 1, False, array[-1, -2, -3, -4, -5, -6, -7, -8, -8, -9, -19, -29, -39, -49]),
+    (400, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (400, 1, False, array[-1, -2, -3, -4, -5, -6, -6, -7, -8, -9, -19, -29, -38, -48]),
+    (800, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (800, 1, False, array[-1, -2, -3, -4, -5, -6, -6, -7, -7, -8, -18, -28, -37, -46]),
+    (1200, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (1200, 1, False, array[-1, -2, -3, -4, -4, -5, -5, -6, -7, -8, -17, -26, -35, -44]),
+    (1600, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (1600, 1, False, array[-1, -2, -3, -3, -4, -4, -5, -6, -7, -7, -17, -25, -34, -42]),
+    (2000, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (2000, 1, False, array[-1, -2, -3, -3, -4, -4, -5, -6, -6, -7, -16, -24, -32, -40]),
+    (2400, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (2400, 1, False, array[-1, -2, -2, -3, -4, -4, -5, -5, -6, -7, -15, -23, -31, -38]),
+    (3000, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (3000, 1, False, array[-1, -2, -2, -3, -4, -4, -4, -5, -5, -6, -15, -22, -30, -37]),
+    (4000, 1, True, array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30]),
+    (4000, 1, False, array[-1, -2, -2, -3, -4, -4, -4, -4, -5, -6, -14, -20, -27, -34]);
+
+
+CREATE OR REPLACE PROCEDURE calc_average_deviation(temp float[])
+AS $$
+DECLARE
+    positive_sum float := 0;
+    negative_sum float := 0;
+    count_positive int := 0;
+    count_negative int := 0;
+    deviation float;
+BEGIN
+    -- Разделяем температуры на положительные и отрицательные
+    FOR i IN 1..array_length(temp, 1) LOOP
+        IF temp[i] > 0 THEN
+            positive_sum := positive_sum + temp[i];  -- Положительные температуры добавляются в знаменатель
+            count_positive := count_positive + 1;
+        ELSE
+            negative_sum := negative_sum + temp[i];  -- Отрицательные температуры добавляются в числитель
+            count_negative := count_negative + 1;
+        END IF;
+    END LOOP;
+
+    -- Среднее отклонение для положительных значений
+    IF count_positive > 0 THEN
+        deviation := positive_sum / count_positive;
+    ELSE
+        deviation := 0;
+    END IF;
+
+    -- Среднее отклонение для отрицательных значений
+    IF count_negative > 0 THEN
+        deviation := deviation + (negative_sum / count_negative);
+    END IF;
+
+    RAISE NOTICE 'Среднее отклонение: %', deviation;
+END;
+$$ LANGUAGE plpgsql;
+
+CALL calc_average_deviation(array[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+
+SELECT 
+    e.name AS "ФИО",
+    mr.description AS "Должность",
+    COUNT(mb.id) AS "Кол-во измерений",
+    SUM(
+        CASE WHEN (
+            mip.temperature < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_temperature') OR
+            mip.temperature > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_temperature') OR
+            mip.pressure < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_pressure') OR
+            mip.pressure > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_pressure') OR
+            mip.wind_direction < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_wind_direction') OR
+            mip.wind_direction > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_wind_direction') OR
+            mip.height < (SELECT value::numeric FROM measurment_settings WHERE key = 'min_height') OR
+            mip.height > (SELECT value::numeric FROM measurment_settings WHERE key = 'max_height')
+        ) THEN 1 ELSE 0 END
+    ) AS "Количество ошибочных данных"
+FROM 
+    employees e
+JOIN 
+    military_ranks mr ON e.military_rank_id = mr.id
+LEFT JOIN 
+    measurment_baths mb ON e.id = mb.emploee_id
+LEFT JOIN 
+    measurment_input_params mip ON mb.measurment_input_param_id = mip.id
+GROUP BY 
+    e.name, mr.description
+ORDER BY 
+    "Количество ошибочных данных" DESC;
+
