@@ -1399,3 +1399,6 @@ $body$;
 
 -- Проверка отчета
 select * from vw_report_fails_height_statistics
+
+
+
