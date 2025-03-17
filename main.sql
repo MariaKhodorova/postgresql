@@ -4,8 +4,6 @@ begin
 /*
 Скрипт создания информационной базы данных
 Согласно технического задания https://git.hostfl.ru/VolovikovAlex/Study2025
-Редакция 2025-03-07
-Edit by valex
 */
 
 
@@ -1398,7 +1396,119 @@ $body$;
 
 
 -- Проверка отчета
-select * from vw_report_fails_height_statistics
+select * from vw_report_fails_height_statistics;
 
 
 
+------------------------------
+
+-- Удаление старого триггера, если он существует
+DROP TRIGGER IF EXISTS tr_temp_input_params ON temp_input_params;
+
+-- Создание последовательности для автоинкремента
+CREATE SEQUENCE IF NOT EXISTS public.temp_input_params_seq;
+
+-- Создание таблицы temp_input_params
+CREATE TABLE IF NOT EXISTS temp_input_params
+(
+    id integer NOT NULL PRIMARY KEY DEFAULT nextval('public.temp_input_params_seq'),
+    emploee_name varchar(100),
+    measurment_type_id integer NOT NULL,
+    height numeric(8,2) DEFAULT 0,
+    temperature numeric(8,2) DEFAULT 0,
+    pressure numeric(8,2) DEFAULT 0,
+    wind_direction numeric(8,2) DEFAULT 0,
+    wind_speed numeric(8,2) DEFAULT 0,
+    bullet_demolition_range numeric(8,2) DEFAULT 0,
+    measurment_input_params_id integer,
+    error_message text,
+    calc_result jsonb
+);
+
+-- Создание триггера
+CREATE TRIGGER tr_temp_input_params
+AFTER INSERT ON temp_input_params
+FOR EACH ROW
+EXECUTE FUNCTION fn_tr_temp_input_params();
+
+-- Создание функции для триггера
+CREATE OR REPLACE FUNCTION fn_tr_temp_input_params()
+RETURNS TRIGGER AS
+$$
+DECLARE
+    var_check_result public.check_result_type;
+    var_input_params public.input_params_type;
+    var_response public.calc_result_response_type;
+    var_calc_result public.calc_result_type[];
+BEGIN
+    -- Проверка параметров
+    var_check_result := fn_check_input_params(  
+        NEW.height,
+        NEW.temperature,
+        NEW.pressure,
+        NEW.wind_direction,
+        NEW.wind_speed,
+        NEW.bullet_demolition_range
+    );
+
+    -- Если проверка не пройдена, записываем ошибку и выходим
+    IF var_check_result.is_check = FALSE THEN
+        RAISE NOTICE 'Ошибка: %', var_check_result.error_message;
+        NEW.error_message := var_check_result.error_message;
+        RETURN NEW;
+    END IF;
+
+    -- Передаем проверенные параметры в расчет
+    var_input_params := var_check_result.params;
+
+    -- Формируем заголовок расчета
+    var_response.header := public.fn_calc_header_meteo_avg(var_input_params);
+
+    -- Выполняем расчет
+    CALL public.sp_calc_corrections(
+        par_input_params => var_input_params, 
+        par_measurement_type_id => NEW.measurment_type_id, 
+        par_results => var_calc_result
+    );
+
+    -- Записываем результат в JSON-формате
+    var_response.calc_result := var_calc_result;
+    NEW.calc_result := row_to_json(var_response);
+
+    -- Если расчет успешен, копируем данные в основные таблицы
+    IF var_response.calc_result IS NOT NULL THEN
+        -- Вставляем данные в основную таблицу input_params
+        INSERT INTO public.input_params (
+            emploee_name, 
+            measurment_type_id, 
+            height, 
+            temperature, 
+            pressure, 
+            wind_direction, 
+            wind_speed, 
+            bullet_demolition_range
+        ) 
+        VALUES (
+            NEW.emploee_name, 
+            NEW.measurment_type_id, 
+            NEW.height, 
+            NEW.temperature, 
+            NEW.pressure, 
+            NEW.wind_direction, 
+            NEW.wind_speed, 
+            NEW.bullet_demolition_range
+        ) 
+        RETURNING id INTO NEW.measurment_input_params_id;
+
+        -- Если сотрудник еще не существует, добавляем его в таблицу employees
+        IF NOT EXISTS (
+            SELECT 1 FROM public.employees WHERE name = NEW.emploee_name
+        ) THEN
+            INSERT INTO public.employees (name) VALUES (NEW.emploee_name);
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
