@@ -4,8 +4,6 @@ begin
 /*
 Скрипт создания информационной базы данных
 Согласно технического задания https://git.hostfl.ru/VolovikovAlex/Study2025
-Редакция 2025-03-07
-Edit by valex
 */
 
 
@@ -1398,7 +1396,160 @@ $body$;
 
 
 -- Проверка отчета
-select * from vw_report_fails_height_statistics
+select * from vw_report_fails_height_statistics;
 
 
 
+------------------- final homework -------------------
+
+-- Удаление старого триггера, если он существует
+DROP TRIGGER IF EXISTS tr_temp_input_params ON temp_input_params;
+
+CREATE TABLE IF NOT EXISTS temp_input_params (
+    id SERIAL PRIMARY KEY,
+    emploee_name VARCHAR(100),
+    measurment_type_id INTEGER NOT NULL,
+    height NUMERIC(8,2) DEFAULT 0,
+    temperature NUMERIC(8,2) DEFAULT 0,
+    pressure NUMERIC(8,2) DEFAULT 0,
+    wind_direction NUMERIC(8,2) DEFAULT 0,
+    wind_speed NUMERIC(8,2) DEFAULT 0,
+    bullet_demolition_range NUMERIC(8,2) DEFAULT 0,
+    measurment_input_params_id INTEGER,
+    error_message TEXT,
+    calc_result JSONB
+);
+
+CREATE TYPE public.calc_result_response_type AS (
+    header TEXT,
+    calc_result JSONB
+);
+
+
+-- Создание функции триггера
+CREATE OR REPLACE FUNCTION fn_tr_temp_input_params()
+RETURNS TRIGGER AS
+$$
+DECLARE
+    var_check_result public.check_result_type;
+    var_input_params public.input_params_type;
+    var_response public.calc_result_response_type;
+    var_calc_result public.calc_result_type[];
+BEGIN
+    -- Проверяем параметры через fn_check_input_params
+    var_check_result := fn_check_input_params(  
+        NEW.height,
+        NEW.temperature,
+        NEW.pressure,
+        NEW.wind_direction,
+        NEW.wind_speed,
+        NEW.bullet_demolition_range
+    );
+
+    -- Проверяем результат функции
+    IF var_check_result IS NULL THEN
+        RAISE EXCEPTION 'Ошибка при вызове fn_check_input_params: NULL-результат';
+    END IF;
+
+    -- Если проверка не пройдена, записываем ошибку и выходим
+    IF var_check_result.is_check = FALSE THEN
+        RAISE NOTICE 'Ошибка проверки параметров: %', var_check_result.error_message;
+        NEW.error_message := var_check_result.error_message;
+        RETURN NEW;
+    END IF;
+
+    -- Передаём проверенные параметры в расчёт
+    var_input_params := var_check_result.params;
+
+    -- Формируем заголовок расчёта
+	var_response.header := public.fn_calc_header_meteo_avg(var_input_params);
+
+	-- Выполняем расчёт
+	CALL public.sp_calc_corrections(
+    par_input_params => var_input_params, 
+    par_measurement_type_id => NEW.measurment_type_id, 
+    par_results => var_calc_result
+	);
+
+	-- Проверяем корректность результата расчёта
+	IF var_calc_result IS NULL THEN
+    	RAISE EXCEPTION 'Ошибка в sp_calc_corrections: NULL-результат';
+	END IF;
+
+	-- Преобразуем результат расчёта в формат JSON
+	var_response.calc_result := jsonb_build_array(var_calc_result); -- преобразование в JSONB
+
+	-- Записываем результат в JSON-формате
+	NEW.calc_result := row_to_json(var_response);
+
+
+    -- Если расчёт успешен, сохраняем данные
+    IF var_response.calc_result IS NOT NULL THEN
+        INSERT INTO public.measurment_input_params (
+            emploee_name, 
+            measurment_type_id, 
+            height, 
+            temperature, 
+            pressure, 
+            wind_direction, 
+            wind_speed, 
+            bullet_demolition_range
+        ) 
+        VALUES (
+            NEW.emploee_name, 
+            NEW.measurment_type_id, 
+            NEW.height, 
+            NEW.temperature, 
+            NEW.pressure, 
+            NEW.wind_direction, 
+            NEW.wind_speed, 
+            NEW.bullet_demolition_range
+        ) 
+        RETURNING id INTO NEW.measurment_input_params_id;
+
+        -- Добавляем сотрудника в employees, если его нет
+        IF NOT EXISTS (
+            SELECT 1 FROM public.employees WHERE name = NEW.emploee_name
+        ) THEN
+            INSERT INTO public.employees (name) VALUES (NEW.emploee_name);
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
+
+-- Создание триггера
+CREATE TRIGGER tr_temp_input_params
+BEFORE INSERT ON temp_input_params
+FOR EACH ROW
+EXECUTE FUNCTION fn_tr_temp_input_params();
+
+
+
+-- Вставка данных в таблицу temp_input_params
+INSERT INTO temp_input_params (
+    emploee_name, 
+    measurment_type_id, 
+    height, 
+    temperature, 
+    pressure, 
+    wind_direction, 
+    wind_speed, 
+    bullet_demolition_range
+) 
+VALUES (
+    'Иван Иванов',  -- emploee_name
+    1,              -- measurment_type_id
+    107.0,          -- height
+    15.0,           -- temperature
+    750.0,          -- pressure
+    45.0,           -- wind_direction
+    3.5,            -- wind_speed
+    100.0           -- bullet_demolition_range
+);
+
+
+
+select * from temp_input_params;
